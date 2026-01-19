@@ -7,6 +7,15 @@ import ResultsScreen from './components/ResultsScreen';
 import Navbar from './components/Navbar';
 import { GoogleGenAI } from "@google/genai";
 
+// الوصول الآمن لمتغيرات البيئة لتجنب أخطاء Vite و Vercel
+const getEnv = (key: string): string | undefined => {
+  try {
+    return (window as any).process?.env?.[key] || (globalThis as any).process?.env?.[key];
+  } catch {
+    return undefined;
+  }
+};
+
 type SearchStatus = 'IDLE' | 'SEARCHING' | 'SUCCESS' | 'EMPTY' | 'ERROR';
 
 const App: React.FC = () => {
@@ -25,8 +34,7 @@ const App: React.FC = () => {
       const toId = CITY_MAP_BLUEBUS[to];
       if (!fromId || !toId) return [];
 
-      // استخدام التوكن من البيئة مباشرة لتجنب تسريبه في الكود المصدري
-      const token = process.env.API_KEY_1 || "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FwaS5ibHVlYnVzLmNvbS5lZy9ncmFwaHFsIiwiaWF0IjoxNzY4ODE1MTk1LCJleHAiOjc3Njg4MTUxOTUsIm5iZiI6MTc2ODgxNTE5NSwianRpIjoiRUpjckE3SGQwQXB4M1VoYyIsInN1YiI6ODMzMTUwLCJwcnYiOiIxZDBhMDIwYWNmNWM0YjZjNDk3OTg5ZGYxYWJmMGZiZDRlOGM4ZDYzIiwicGhvbmUiOiIwMTIyMTc0NjU1NCJ9.ssZIJ8puXegceIagHst1QUJglACinMGxPxdhvTTo8";
+      const token = getEnv('API_KEY_1') || "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FwaS5ibHVlYnVzLmNvbS5lZy9ncmFwaHFsIiwiaWF0IjoxNzY4ODE1MTk1LCJleHAiOjc3Njg4MTUxOTUsIm5iZiI6MTc2ODgxNTE5NSwianRpIjoiRUpjckE3SGQwQXB4M1VoYyIsInN1YiI6ODMzMTUwLCJwcnYiOiIxZDBhMDIwYWNmNWM0YjZjNDk3OTg5ZGYxYWJmMGZiZDRlOGM4ZDYzIiwicGhvbmUiOiIwMTIyMTc0NjU1NCJ9.ssZIJ8puXegceIagHst1QUJglACinMGxPxdhvTTo8";
 
       const response = await fetch(BLUEBUS_ENDPOINTS.SEARCH, {
         method: 'POST',
@@ -41,24 +49,24 @@ const App: React.FC = () => {
         })
       });
 
-      if (!response.ok) throw new Error('BlueBus API Error');
+      if (!response.ok) return [];
       const data = await response.json();
       
       return (data.tours || []).map((t: any) => ({
-        id: `bb_${t.id}`,
+        id: `bb_${t.id || Math.random()}`,
         companyId: 'c5',
         from, to, date,
-        time: t.departureTime,
-        price: t.price,
+        time: t.departureTime || '00:00',
+        price: t.price || 0,
         busType: t.busType || 'Premium',
         remainingSeats: t.availableSeats || 5,
         officialBookingUrl: 'https://bluebus.com.eg',
-        dataSource: 'OFFICIAL_PARTNER',
+        dataSource: 'OFFICIAL_PARTNER' as const,
         totalSeats: 48,
         availableSeats: []
       }));
     } catch (e) {
-      console.warn("Direct API check failed (likely CORS or Token), falling back to AI...", e);
+      console.warn("Direct API failed (likely CORS). Using AI fallback.");
       return [];
     }
   };
@@ -69,22 +77,25 @@ const App: React.FC = () => {
     
     setTrips([]);
     setSearchStatus('SEARCHING');
-    setScanningStatus(`جاري فحص رحلات ${from} إلى ${to}...`);
+    setScanningStatus(`جاري فحص التوفر من ${from} إلى ${to}...`);
 
     try {
-      // 1. محاولة الجلب المباشر
+      // 1. جلب مباشر إذا أمكن
       const blueBusTrips = await fetchDirectBlueBus(from, to, date);
-      if (activeSearchId.current === searchId) {
+      if (activeSearchId.current === searchId && blueBusTrips.length > 0) {
         setTrips(prev => [...prev, ...blueBusTrips]);
       }
 
-      // 2. استخدام Gemini 3 Pro للبحث Grounding (أكثر دقة في النتائج المباشرة)
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "AIzaSyCsamL-x7uNkx8LtNk8jfgaiqlG-Fne6E" });
-      const prompt = `Find live bus trips from ${from} to ${to} for ${date} on Go Bus, Superjet, and Blue Bus. 
-      Return JSON: [{"company": "String", "time": "HH:mm", "price": Number, "type": "String", "url": "String"}]`;
+      // 2. استخدام Gemini 3 Flash للبحث الأرضي لجميع الشركات
+      const apiKey = getEnv('API_KEY') || "AIzaSyCsamL-x7uNkx8LtNk8jfgaiqlG-Fne6E";
+      const ai = new GoogleGenAI({ apiKey });
+      
+      const prompt = `Search for bus trips from ${from} to ${to} on date ${date} for companies like Go Bus, Superjet, and Blue Bus. 
+      Return JSON array: [{"company": "name", "time": "HH:mm", "price": number, "type": "class", "bookingUrl": "url"}]. 
+      If no trips, return empty array [].`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
+        model: 'gemini-3-flash-preview',
         contents: prompt,
         config: { 
           tools: [{ googleSearch: {} }],
@@ -101,48 +112,49 @@ const App: React.FC = () => {
       const text = response.text || "";
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       
+      let aiMappedTrips: Trip[] = [];
       if (jsonMatch) {
-        const aiResults = JSON.parse(jsonMatch[0]);
-        const mappedTrips: Trip[] = aiResults.map((item: any) => {
-          const companyName = item.company.toLowerCase();
-          let companyMatch = INITIAL_COMPANIES.find(c => companyName.includes(c.name.toLowerCase()));
-          if (!companyMatch) companyMatch = INITIAL_COMPANIES[1];
-
-          return {
-            id: `ai_${Math.random().toString(36).substr(2, 9)}`,
-            companyId: companyMatch.id,
-            from, to, date,
-            time: item.time,
-            price: Number(item.price) || 280,
-            busType: item.type || 'Classic',
-            remainingSeats: 5,
-            officialBookingUrl: item.url || 'https://safareyat.com',
-            dataSource: 'WEB_EXTRACTED',
-            totalSeats: 48,
-            availableSeats: []
-          };
-        }); 
-
-        setTrips(prev => {
-          const uniqueIds = new Set(prev.map(t => `${t.companyId}-${t.time}`));
-          const filteredAi = mappedTrips.filter(t => !uniqueIds.has(`${t.companyId}-${t.time}`));
-          return [...prev, ...filteredAi];
-        });
-        setSearchStatus('SUCCESS');
-      } else if (blueBusTrips.length > 0) {
-        setSearchStatus('SUCCESS');
-      } else {
-        setSearchStatus('EMPTY');
+        try {
+          const aiResults = JSON.parse(jsonMatch[0]);
+          aiMappedTrips = aiResults.map((item: any) => {
+            const companyMatch = INITIAL_COMPANIES.find(c => 
+              item.company.toLowerCase().includes(c.name.toLowerCase()) || 
+              c.name.toLowerCase().includes(item.company.toLowerCase())
+            );
+            
+            return {
+              id: `ai_${Math.random().toString(36).substr(2, 9)}`,
+              companyId: companyMatch ? companyMatch.id : 'c1',
+              from, to, date,
+              time: item.time || '12:00',
+              price: Number(item.price) || 250,
+              busType: item.type || 'Standard',
+              remainingSeats: 10,
+              officialBookingUrl: item.bookingUrl || 'https://safareyat.com',
+              dataSource: 'WEB_EXTRACTED' as const,
+              totalSeats: 48,
+              availableSeats: []
+            };
+          });
+        } catch (e) { console.error("Parse Error"); }
       }
+
+      setTrips(prev => {
+        const existing = new Set(prev.map(t => `${t.companyId}-${t.time}`));
+        const newResults = aiMappedTrips.filter(t => !existing.has(`${t.companyId}-${t.time}`));
+        return [...prev, ...newResults];
+      });
+
+      setSearchStatus(prev => (trips.length > 0 || aiMappedTrips.length > 0 || blueBusTrips.length > 0) ? 'SUCCESS' : 'EMPTY');
 
     } catch (e) {
-      console.error("Hybrid Search Error:", e);
+      console.error("Exception:", e);
       if (activeSearchId.current === searchId) {
-        if (trips.length > 0) setSearchStatus('SUCCESS');
-        else setSearchStatus('ERROR');
+        setSearchStatus(prev => trips.length > 0 ? 'SUCCESS' : 'ERROR');
       }
+    } finally {
+      setScanningStatus('');
     }
-    setScanningStatus('');
   };
 
   return (
@@ -150,8 +162,8 @@ const App: React.FC = () => {
       <Navbar currentScreen={currentScreen} goBack={() => setCurrentScreen('SEARCH')} onAdmin={()=>{}} onCompany={()=>{}} onHome={()=>setCurrentScreen('SEARCH')} />
       
       {scanningStatus && (
-        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2">
-          <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
+        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2 animate-fadeIn">
+          <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
           <span className="font-bold">{scanningStatus}</span>
         </div>
       )}
@@ -179,11 +191,15 @@ const App: React.FC = () => {
       </div>
 
       {groundingLinks.length > 0 && currentScreen === 'RESULTS' && (
-        <div className="p-4 bg-gray-50 text-[7px] text-gray-400 border-t flex flex-wrap gap-2">
-           <span className="font-bold opacity-50">SOURCES:</span>
-           {groundingLinks.map((link, i) => (
-             <a key={i} href={link.web?.uri} target="_blank" className="underline hover:text-blue-500">{link.web?.title}</a>
-           ))}
+        <div className="p-4 bg-gray-50 text-[8px] text-gray-400 border-t">
+           <p className="mb-2 font-black opacity-50 uppercase tracking-widest italic">مصادر البيانات اللحظية:</p>
+           <div className="flex flex-wrap gap-2">
+              {groundingLinks.map((link, i) => (
+                <a key={i} href={link.web?.uri} target="_blank" className="text-blue-500 underline truncate max-w-[120px]">
+                  {link.web?.title || 'Source'}
+                </a>
+              ))}
+           </div>
         </div>
       )}
     </div>
