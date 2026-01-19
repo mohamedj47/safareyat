@@ -121,7 +121,7 @@ const App: React.FC = () => {
             totalSeats: 48,
             availableSeats: []
           };
-        });
+        }); 
 
         setTrips(prev => {
           const uniqueIds = new Set(prev.map(t => `${t.companyId}-${t.time}`));
