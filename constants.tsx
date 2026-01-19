@@ -4,17 +4,13 @@ import { Province, Company } from './types';
 export const SERVICE_FEE = 5; 
 export const VODAFONE_CASH_NUMBER = "01021953277";
 
-// المفاتيح والتوكنات (جلب من Vercel أو استخدام القيم التي قدمتها كـ Fallback)
-export const GEMINI_API_KEY = process.env.API_KEY || 
-export const BLUEBUS_TOKEN = process.env.API_KEY_1 || 
-
-// روابط الـ APIs الرسمية التي قدمتها
+// روابط الـ APIs الرسمية لشركة بلو باص
 export const BLUEBUS_ENDPOINTS = {
-  SEARCH: 
-  STATIONS: 
+  SEARCH: "https://api.bluebus.com.eg/api/Tour/GetSearchToursForWeb",
+  STATIONS: "https://api.bluebus.com.eg/get-stations/"
 };
 
-// خريطة معرفات المدن لشركة بلو باص (City IDs)
+// خريطة معرفات المدن لشركة بلو باص
 export const CITY_MAP_BLUEBUS: Record<string, number> = {
   'القاهرة': 1, 'الإسكندرية': 2, 'الغردقة': 3, 'شرم الشيخ': 4, 'بورسعيد': 5, 'مرسى مطروح': 6, 'الأقصر': 7, 'أسوان': 8, 'المنصورة': 9
 };
