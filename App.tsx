@@ -7,13 +7,12 @@ import ResultsScreen from './components/ResultsScreen';
 import Navbar from './components/Navbar';
 import { GoogleGenAI } from "@google/genai";
 
-// الوصول الآمن لمتغيرات البيئة لتجنب أخطاء Vite و Vercel
-const getEnv = (key: string): string | undefined => {
-  try {
-    return (window as any).process?.env?.[key] || (globalThis as any).process?.env?.[key];
-  } catch {
-    return undefined;
-  }
+// تعريف process لتجنب أخطاء Vite أثناء البناء
+declare var process: {
+  env: {
+    API_KEY: string;
+    API_KEY_1?: string;
+  };
 };
 
 type SearchStatus = 'IDLE' | 'SEARCHING' | 'SUCCESS' | 'EMPTY' | 'ERROR';
@@ -34,7 +33,8 @@ const App: React.FC = () => {
       const toId = CITY_MAP_BLUEBUS[to];
       if (!fromId || !toId) return [];
 
-      const token = getEnv('API_KEY_1') || "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FwaS5ibHVlYnVzLmNvbS5lZy9ncmFwaHFsIiwiaWF0IjoxNzY4ODE1MTk1LCJleHAiOjc3Njg4MTUxOTUsIm5iZiI6MTc2ODgxNTE5NSwianRpIjoiRUpjckE3SGQwQXB4M1VoYyIsInN1YiI6ODMzMTUwLCJwcnYiOiIxZDBhMDIwYWNmNWM0YjZjNDk3OTg5ZGYxYWJmMGZiZDRlOGM4ZDYzIiwicGhvbmUiOiIwMTIyMTc0NjU1NCJ9.ssZIJ8puXegceIagHst1QUJglACinMGxPxdhvTTo8";
+      // استخدام المفتاح المخصص لـ Blue Bus من البيئة
+      const token = process.env.API_KEY_1 || "";
 
       const response = await fetch(BLUEBUS_ENDPOINTS.SEARCH, {
         method: 'POST',
@@ -53,7 +53,7 @@ const App: React.FC = () => {
       const data = await response.json();
       
       return (data.tours || []).map((t: any) => ({
-        id: `bb_${t.id || Math.random()}`,
+        id: `bb_${t.id || Math.random().toString(36).substr(2, 5)}`,
         companyId: 'c5',
         from, to, date,
         time: t.departureTime || '00:00',
@@ -66,7 +66,7 @@ const App: React.FC = () => {
         availableSeats: []
       }));
     } catch (e) {
-      console.warn("Direct API failed (likely CORS). Using AI fallback.");
+      console.warn("Direct API check failed, relying on AI Grounding...");
       return [];
     }
   };
@@ -77,22 +77,23 @@ const App: React.FC = () => {
     
     setTrips([]);
     setSearchStatus('SEARCHING');
-    setScanningStatus(`جاري فحص التوفر من ${from} إلى ${to}...`);
+    setScanningStatus(`جاري فحص رحلات ${from} إلى ${to}...`);
 
     try {
-      // 1. جلب مباشر إذا أمكن
+      // 1. محاولة الجلب المباشر أولاً
       const blueBusTrips = await fetchDirectBlueBus(from, to, date);
       if (activeSearchId.current === searchId && blueBusTrips.length > 0) {
-        setTrips(prev => [...prev, ...blueBusTrips]);
+        setTrips(blueBusTrips);
       }
 
-      // 2. استخدام Gemini 3 Flash للبحث الأرضي لجميع الشركات
-      const apiKey = getEnv('API_KEY') || "AIzaSyCsamL-x7uNkx8LtNk8jfgaiqlG-Fne6E";
-      const ai = new GoogleGenAI({ apiKey });
+      // 2. استخدام Gemini Search Grounding للبحث الشامل
+      // يجب إنشاء مثيل جديد دائماً باستخدام المفتاح المحقون
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      const prompt = `Search for bus trips from ${from} to ${to} on date ${date} for companies like Go Bus, Superjet, and Blue Bus. 
-      Return JSON array: [{"company": "name", "time": "HH:mm", "price": number, "type": "class", "bookingUrl": "url"}]. 
-      If no trips, return empty array [].`;
+      const prompt = `Find available bus trips from ${from} to ${to} on ${date}. 
+      Focus on Go Bus, Superjet, and Blue Bus. 
+      Return only a JSON array of objects: [{"company": "String", "time": "HH:mm", "price": Number, "type": "String", "bookingUrl": "String"}] 
+      If no trips found, return [].`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
@@ -105,66 +106,77 @@ const App: React.FC = () => {
 
       if (activeSearchId.current !== searchId) return;
 
+      // استخراج روابط المصادر (Grounding)
       if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
         setGroundingLinks(response.candidates[0].groundingMetadata.groundingChunks);
       }
 
-      const text = response.text || "";
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      const textOutput = response.text || "";
+      const jsonMatch = textOutput.match(/\[[\s\S]*\]/);
       
-      let aiMappedTrips: Trip[] = [];
+      let aiTrips: Trip[] = [];
       if (jsonMatch) {
-        try {
-          const aiResults = JSON.parse(jsonMatch[0]);
-          aiMappedTrips = aiResults.map((item: any) => {
-            const companyMatch = INITIAL_COMPANIES.find(c => 
-              item.company.toLowerCase().includes(c.name.toLowerCase()) || 
-              c.name.toLowerCase().includes(item.company.toLowerCase())
-            );
-            
-            return {
-              id: `ai_${Math.random().toString(36).substr(2, 9)}`,
-              companyId: companyMatch ? companyMatch.id : 'c1',
-              from, to, date,
-              time: item.time || '12:00',
-              price: Number(item.price) || 250,
-              busType: item.type || 'Standard',
-              remainingSeats: 10,
-              officialBookingUrl: item.bookingUrl || 'https://safareyat.com',
-              dataSource: 'WEB_EXTRACTED' as const,
-              totalSeats: 48,
-              availableSeats: []
-            };
-          });
-        } catch (e) { console.error("Parse Error"); }
+        const rawResults = JSON.parse(jsonMatch[0]);
+        aiTrips = rawResults.map((item: any) => {
+          const companyMatch = INITIAL_COMPANIES.find(c => 
+            item.company.toLowerCase().includes(c.name.toLowerCase()) || 
+            c.name.toLowerCase().includes(item.company.toLowerCase())
+          );
+          
+          return {
+            id: `ai_${Math.random().toString(36).substr(2, 9)}`,
+            companyId: companyMatch ? companyMatch.id : 'c1',
+            from, to, date,
+            time: item.time || '12:00',
+            price: Number(item.price) || 200,
+            busType: item.type || 'Standard',
+            remainingSeats: 10,
+            officialBookingUrl: item.bookingUrl || 'https://safareyat.com',
+            dataSource: 'WEB_EXTRACTED' as const,
+            totalSeats: 48,
+            availableSeats: []
+          };
+        });
       }
 
       setTrips(prev => {
-        const existing = new Set(prev.map(t => `${t.companyId}-${t.time}`));
-        const newResults = aiMappedTrips.filter(t => !existing.has(`${t.companyId}-${t.time}`));
-        return [...prev, ...newResults];
+        // منع التكرار بناءً على وقت الرحلة والشركة
+        const seen = new Set(prev.map(t => `${t.companyId}-${t.time}`));
+        const filteredAi = aiTrips.filter(t => !seen.has(`${t.companyId}-${t.time}`));
+        const combined = [...prev, ...filteredAi];
+        
+        // تحديث الحالة النهائية بناءً على وجود نتائج
+        setSearchStatus(combined.length > 0 ? 'SUCCESS' : 'EMPTY');
+        return combined;
       });
 
-      setSearchStatus(prev => (trips.length > 0 || aiMappedTrips.length > 0 || blueBusTrips.length > 0) ? 'SUCCESS' : 'EMPTY');
-
-    } catch (e) {
-      console.error("Exception:", e);
+    } catch (error) {
+      console.error("Search Flow Failed:", error);
       if (activeSearchId.current === searchId) {
-        setSearchStatus(prev => trips.length > 0 ? 'SUCCESS' : 'ERROR');
+        // إذا كان هناك نتائج سابقة (مثل Blue Bus) نبقي الحالة SUCCESS
+        setSearchStatus(prevTrips => (prevTrips.length > 0 || trips.length > 0) ? 'SUCCESS' : 'ERROR');
       }
     } finally {
-      setScanningStatus('');
+      if (activeSearchId.current === searchId) {
+        setScanningStatus('');
+      }
     }
   };
 
   return (
     <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl border-x font-['Cairo']">
-      <Navbar currentScreen={currentScreen} goBack={() => setCurrentScreen('SEARCH')} onAdmin={()=>{}} onCompany={()=>{}} onHome={()=>setCurrentScreen('SEARCH')} />
+      <Navbar 
+        currentScreen={currentScreen} 
+        goBack={() => setCurrentScreen('SEARCH')} 
+        onAdmin={()=>{}} 
+        onCompany={()=>{}} 
+        onHome={()=>setCurrentScreen('SEARCH')} 
+      />
       
       {scanningStatus && (
-        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2 animate-fadeIn">
-          <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
-          <span className="font-bold">{scanningStatus}</span>
+        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2 animate-fadeIn shadow-lg">
+          <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
+          <span className="font-bold tracking-wide">{scanningStatus}</span>
         </div>
       )}
 
@@ -191,15 +203,13 @@ const App: React.FC = () => {
       </div>
 
       {groundingLinks.length > 0 && currentScreen === 'RESULTS' && (
-        <div className="p-4 bg-gray-50 text-[8px] text-gray-400 border-t">
-           <p className="mb-2 font-black opacity-50 uppercase tracking-widest italic">مصادر البيانات اللحظية:</p>
-           <div className="flex flex-wrap gap-2">
-              {groundingLinks.map((link, i) => (
-                <a key={i} href={link.web?.uri} target="_blank" className="text-blue-500 underline truncate max-w-[120px]">
-                  {link.web?.title || 'Source'}
-                </a>
-              ))}
-           </div>
+        <div className="p-4 bg-gray-50 text-[8px] text-gray-400 border-t flex flex-wrap gap-2 animate-slideUp">
+           <span className="font-black opacity-50 uppercase italic">البيانات مستخرجة من:</span>
+           {groundingLinks.map((link, i) => (
+             <a key={i} href={link.web?.uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline truncate max-w-[150px] hover:text-blue-700">
+               {link.web?.title || 'مصدر رسمي'}
+             </a>
+           ))}
         </div>
       )}
     </div>
