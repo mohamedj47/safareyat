@@ -1,7 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Trip, Company } from './types';
-import { PROVINCES, INITIAL_COMPANIES, BLUEBUS_TOKEN } from './constants';
+import { PROVINCES, INITIAL_COMPANIES, GEMINI_API_KEY } from './constants';
 import SearchScreen from './components/SearchScreen';
 import ResultsScreen from './components/ResultsScreen';
 import Navbar from './components/Navbar';
@@ -24,33 +24,21 @@ const App: React.FC = () => {
     
     setTrips([]);
     setSearchStatus('SEARCHING');
-    setScanningStatus(`جاري فحص مواقع (جو باص، سوبر جيت، وي باص) لجلب مواعيد وأسعار حقيقية...`);
+    setScanningStatus(`جاري المسح المباشر لرحلات ${from} إلى ${to}...`);
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || GEMINI_API_KEY });
     
     try {
-      // برومبت صارم جداً لمنع الهذيان في الأسعار والروابط
-      const prompt = `You are a professional Egyptian Bus Transport Expert.
-      Task: Find REAL and CURRENT bus trips from ${from} to ${to} for date ${date}.
-      
-      RULES:
-      1. PRICES: Must be REAL market prices (typically 150 EGP to 800 EGP). NEVER return prices like 10, 12, or 50 EGP. If you can't find the exact price, estimate based on current 2024/2025 rates for this distance.
-      2. BOOKING LINKS: 
-         - Go Bus results MUST link to https://go-bus.com
-         - Superjet results MUST link to https://superjet.com.eg
-         - Blue Bus results MUST link to https://bluebus.com.eg
-         - We Bus results MUST link to https://webus.com.eg
-      3. SEARCH: Use Google Search to find actual schedules on official websites.
-      
-      OUTPUT JSON ONLY:
-      [{"company": "String", "time": "HH:mm", "price": Number, "type": "String", "url": "String"}]`;
+      const prompt = `Find actual bus trips from ${from} to ${to} on ${date}. 
+      Check official websites like Go Bus, Superjet, and Blue Bus. 
+      Return JSON only: [{"company": "String", "time": "HH:mm", "price": Number, "type": "String", "url": "String"}]`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3-pro-preview', 
         contents: prompt,
         config: { 
           tools: [{ googleSearch: {} }],
-          temperature: 0, // منع الإبداع والالتزام بالحقائق فقط
+          temperature: 0,
         }
       });
 
@@ -62,54 +50,50 @@ const App: React.FC = () => {
       if (jsonMatch) {
         const rawResults = JSON.parse(jsonMatch[0]);
         const mappedTrips: Trip[] = rawResults.map((item: any) => {
-          // ربط الشركة بدقة بناءً على الاسم المرجوع
           const companyName = item.company.toLowerCase();
           let companyMatch = INITIAL_COMPANIES.find(c => companyName.includes(c.name.toLowerCase()) || c.name.toLowerCase().includes(companyName));
-          
-          if (!companyMatch) companyMatch = INITIAL_COMPANIES[2]; // Default to Superjet
+          if (!companyMatch) companyMatch = INITIAL_COMPANIES[2]; 
 
-          // التأكد من صحة الرابط بناءً على الشركة
-          let correctUrl = item.url;
-          if (companyMatch.id === 'c1') correctUrl = 'https://go-bus.com';
-          if (companyMatch.id === 'c2') correctUrl = 'https://superjet.com.eg';
-          if (companyMatch.id === 'c5') correctUrl = 'https://bluebus.com.eg';
-          if (companyMatch.id === 'c3') correctUrl = 'https://webus.com.eg';
+          let bookingUrl = item.url;
+          if (companyMatch.id === 'c1') bookingUrl = 'https://go-bus.com';
+          if (companyMatch.id === 'c2') bookingUrl = 'https://superjet.com.eg';
+          if (companyMatch.id === 'c5') bookingUrl = 'https://bluebus.com.eg';
 
           return {
             id: `tr_${Math.random().toString(36).substr(2, 9)}`,
             companyId: companyMatch.id,
             from, to, date,
             time: item.time,
-            price: Number(item.price) < 100 ? 250 : Number(item.price), // تصحيح آلي للأسعار الوهمية
+            price: Number(item.price) < 100 ? 250 : Number(item.price), 
             busType: item.type || 'Classic',
-            remainingSeats: Math.floor(Math.random() * 15) + 5,
-            officialBookingUrl: correctUrl,
-            dataSource: companyMatch.id === 'c5' ? 'OFFICIAL_PARTNER' : 'WEB_EXTRACTED',
+            remainingSeats: 5,
+            officialBookingUrl: bookingUrl,
+            dataSource: 'WEB_EXTRACTED',
             totalSeats: 48,
-            availableSeats: [1,2,3,4,5]
+            availableSeats: [1,2,3]
           };
         });
 
-        setTrips(mappedTrips.sort((a, b) => a.price - b.price));
+        setTrips(mappedTrips);
         setSearchStatus('SUCCESS');
       } else {
         setSearchStatus('EMPTY');
       }
 
     } catch (e) {
-      console.error("Aggregation Error:", e);
+      console.error("Aggregation Fail:", e);
       if (activeSearchId.current === searchId) setSearchStatus('ERROR');
     }
     setScanningStatus('');
   };
 
   return (
-    <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl border-x font-['Cairo'] overflow-x-hidden">
+    <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl border-x font-['Cairo']">
       <Navbar currentScreen={currentScreen} goBack={() => setCurrentScreen('SEARCH')} onAdmin={()=>{}} onCompany={()=>{}} onHome={()=>setCurrentScreen('SEARCH')} />
       
       {scanningStatus && (
-        <div className="bg-black text-white text-[10px] py-3 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-3 border-b border-white/10">
-          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2">
+          <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
           <span className="font-bold">{scanningStatus}</span>
         </div>
       )}
@@ -131,9 +115,7 @@ const App: React.FC = () => {
             trips={trips} 
             status={searchStatus}
             onRetry={() => performRealTimeSearch(searchParams.from, searchParams.to, searchParams.date, searchParams.fromStationId, searchParams.toStationId)}
-            onSelect={(t) => { 
-                window.open(t.officialBookingUrl, '_blank');
-            }} 
+            onSelect={(t) => window.open(t.officialBookingUrl, '_blank')} 
           />
         )}
       </div>
