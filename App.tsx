@@ -7,13 +7,9 @@ import ResultsScreen from './components/ResultsScreen';
 import Navbar from './components/Navbar';
 import { GoogleGenAI } from "@google/genai";
 
-// تعريف process لتجنب أخطاء Vite أثناء البناء
-declare var process: {
-  env: {
-    API_KEY: string;
-    API_KEY_1?: string;
-  };
-};
+// وصول آمن لمتغيرات البيئة في بيئة المتصفح والـ Build
+const getApiKey = () => (globalThis as any).process?.env?.API_KEY || '';
+const getBlueBusToken = () => (globalThis as any).process?.env?.API_KEY_1 || '';
 
 type SearchStatus = 'IDLE' | 'SEARCHING' | 'SUCCESS' | 'EMPTY' | 'ERROR';
 
@@ -33,20 +29,13 @@ const App: React.FC = () => {
       const toId = CITY_MAP_BLUEBUS[to];
       if (!fromId || !toId) return [];
 
-      // استخدام المفتاح المخصص لـ Blue Bus من البيئة
-      const token = process.env.API_KEY_1 || "";
-
       const response = await fetch(BLUEBUS_ENDPOINTS.SEARCH, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': token
+          'Authorization': getBlueBusToken()
         },
-        body: JSON.stringify({
-          fromCityId: fromId,
-          toCityId: toId,
-          date: date
-        })
+        body: JSON.stringify({ fromCityId: fromId, toCityId: toId, date: date })
       });
 
       if (!response.ok) return [];
@@ -66,7 +55,7 @@ const App: React.FC = () => {
         availableSeats: []
       }));
     } catch (e) {
-      console.warn("Direct API check failed, relying on AI Grounding...");
+      console.warn("Direct fetch failed, falling back to AI...");
       return [];
     }
   };
@@ -77,106 +66,79 @@ const App: React.FC = () => {
     
     setTrips([]);
     setSearchStatus('SEARCHING');
-    setScanningStatus(`جاري فحص رحلات ${from} إلى ${to}...`);
+    setScanningStatus(`جاري البحث عن رحلات من ${from} إلى ${to}...`);
 
     try {
-      // 1. محاولة الجلب المباشر أولاً
-      const blueBusTrips = await fetchDirectBlueBus(from, to, date);
-      if (activeSearchId.current === searchId && blueBusTrips.length > 0) {
-        setTrips(blueBusTrips);
+      // 1. Fetch BlueBus directly
+      const bbTrips = await fetchDirectBlueBus(from, to, date);
+      if (activeSearchId.current === searchId && bbTrips.length > 0) {
+        setTrips(bbTrips);
       }
 
-      // 2. استخدام Gemini Search Grounding للبحث الشامل
-      // يجب إنشاء مثيل جديد دائماً باستخدام المفتاح المحقون
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      const prompt = `Find available bus trips from ${from} to ${to} on ${date}. 
-      Focus on Go Bus, Superjet, and Blue Bus. 
-      Return only a JSON array of objects: [{"company": "String", "time": "HH:mm", "price": Number, "type": "String", "bookingUrl": "String"}] 
-      If no trips found, return [].`;
+      // 2. AI Search Grounding
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error("API_KEY missing");
+
+      const ai = new GoogleGenAI({ apiKey });
+      const prompt = `Search for bus trips from ${from} to ${to} on ${date} for Go Bus, Superjet, and Blue Bus. 
+      Return JSON: [{"company": "name", "time": "HH:mm", "price": number, "type": "class", "bookingUrl": "url"}]. 
+      If none, return [].`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
-        config: { 
-          tools: [{ googleSearch: {} }],
-          temperature: 0,
-        }
+        config: { tools: [{ googleSearch: {} }], temperature: 0 }
       });
 
       if (activeSearchId.current !== searchId) return;
 
-      // استخراج روابط المصادر (Grounding)
       if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
         setGroundingLinks(response.candidates[0].groundingMetadata.groundingChunks);
       }
 
-      const textOutput = response.text || "";
-      const jsonMatch = textOutput.match(/\[[\s\S]*\]/);
+      const jsonStr = response.text?.match(/\[[\s\S]*\]/)?.[0] || '[]';
+      const aiResults = JSON.parse(jsonStr);
       
-      let aiTrips: Trip[] = [];
-      if (jsonMatch) {
-        const rawResults = JSON.parse(jsonMatch[0]);
-        aiTrips = rawResults.map((item: any) => {
-          const companyMatch = INITIAL_COMPANIES.find(c => 
-            item.company.toLowerCase().includes(c.name.toLowerCase()) || 
-            c.name.toLowerCase().includes(item.company.toLowerCase())
-          );
-          
-          return {
-            id: `ai_${Math.random().toString(36).substr(2, 9)}`,
-            companyId: companyMatch ? companyMatch.id : 'c1',
-            from, to, date,
-            time: item.time || '12:00',
-            price: Number(item.price) || 200,
-            busType: item.type || 'Standard',
-            remainingSeats: 10,
-            officialBookingUrl: item.bookingUrl || 'https://safareyat.com',
-            dataSource: 'WEB_EXTRACTED' as const,
-            totalSeats: 48,
-            availableSeats: []
-          };
-        });
-      }
+      const aiMapped: Trip[] = aiResults.map((item: any) => ({
+        id: `ai_${Math.random().toString(36).substr(2, 5)}`,
+        companyId: INITIAL_COMPANIES.find(c => item.company.toLowerCase().includes(c.name.toLowerCase()))?.id || 'c1',
+        from, to, date,
+        time: item.time || '10:00',
+        price: Number(item.price) || 250,
+        busType: item.type || 'Standard',
+        remainingSeats: 8,
+        officialBookingUrl: item.bookingUrl || 'https://safareyat.com',
+        dataSource: 'WEB_EXTRACTED' as const,
+        totalSeats: 48,
+        availableSeats: []
+      }));
 
       setTrips(prev => {
-        // منع التكرار بناءً على وقت الرحلة والشركة
         const seen = new Set(prev.map(t => `${t.companyId}-${t.time}`));
-        const filteredAi = aiTrips.filter(t => !seen.has(`${t.companyId}-${t.time}`));
+        const filteredAi = aiMapped.filter(t => !seen.has(`${t.companyId}-${t.time}`));
         const combined = [...prev, ...filteredAi];
-        
-        // تحديث الحالة النهائية بناءً على وجود نتائج
         setSearchStatus(combined.length > 0 ? 'SUCCESS' : 'EMPTY');
         return combined;
       });
 
-    } catch (error) {
-      console.error("Search Flow Failed:", error);
+    } catch (e) {
+      console.error("Search Error:", e);
       if (activeSearchId.current === searchId) {
-        // إذا كان هناك نتائج سابقة (مثل Blue Bus) نبقي الحالة SUCCESS
-        setSearchStatus(prevTrips => (prevTrips.length > 0 || trips.length > 0) ? 'SUCCESS' : 'ERROR');
+        setSearchStatus(trips.length > 0 ? 'SUCCESS' : 'ERROR');
       }
     } finally {
-      if (activeSearchId.current === searchId) {
-        setScanningStatus('');
-      }
+      if (activeSearchId.current === searchId) setScanningStatus('');
     }
   };
 
   return (
     <div className="max-w-md mx-auto bg-white min-h-screen relative shadow-2xl border-x font-['Cairo']">
-      <Navbar 
-        currentScreen={currentScreen} 
-        goBack={() => setCurrentScreen('SEARCH')} 
-        onAdmin={()=>{}} 
-        onCompany={()=>{}} 
-        onHome={()=>setCurrentScreen('SEARCH')} 
-      />
+      <Navbar currentScreen={currentScreen} goBack={() => setCurrentScreen('SEARCH')} onAdmin={()=>{}} onCompany={()=>{}} onHome={()=>setCurrentScreen('SEARCH')} />
       
       {scanningStatus && (
-        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2 animate-fadeIn shadow-lg">
+        <div className="bg-blue-600 text-white text-[10px] py-2 px-4 text-center sticky top-[60px] z-50 flex items-center justify-center gap-2">
           <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
-          <span className="font-bold tracking-wide">{scanningStatus}</span>
+          <span>{scanningStatus}</span>
         </div>
       )}
 
@@ -203,11 +165,11 @@ const App: React.FC = () => {
       </div>
 
       {groundingLinks.length > 0 && currentScreen === 'RESULTS' && (
-        <div className="p-4 bg-gray-50 text-[8px] text-gray-400 border-t flex flex-wrap gap-2 animate-slideUp">
-           <span className="font-black opacity-50 uppercase italic">البيانات مستخرجة من:</span>
+        <div className="p-4 bg-gray-50 text-[8px] text-gray-400 border-t flex flex-wrap gap-2">
+           <span className="font-bold opacity-50 uppercase italic">مصادر حية:</span>
            {groundingLinks.map((link, i) => (
-             <a key={i} href={link.web?.uri} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline truncate max-w-[150px] hover:text-blue-700">
-               {link.web?.title || 'مصدر رسمي'}
+             <a key={i} href={link.web?.uri} target="_blank" className="text-blue-500 underline truncate max-w-[120px]">
+               {link.web?.title || 'Source'}
              </a>
            ))}
         </div>
