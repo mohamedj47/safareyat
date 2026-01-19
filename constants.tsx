@@ -4,16 +4,17 @@ import { Province, Company } from './types';
 export const SERVICE_FEE = 5; 
 export const VODAFONE_CASH_NUMBER = "01021953277";
 
-// المفاتيح والتوكنات
-export const GEMINI_API_KEY = process.env.API_KEY || "AIzaSyCsamL-x7uNkx8LtNk8jfgaiqlG-Fne6E";
-export const BLUEBUS_TOKEN = process.env.API_KEY_1 || "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FwaS5ibHVlYnVzLmNvbS5lZy9ncmFwaHFsIiwiaWF0IjoxNzY4ODE1MTk1LCJleHAiOjc3Njg4MTUxOTUsIm5iZiI6MTc2ODgxNTE5NSwianRpIjoiRUpjckE3SGQwQXB4M1VoYyIsInN1YiI6ODMzMTUwLCJwcnYiOiIxZDBhMDIwYWNmNWM0YjZjNDk3OTg5ZGYxYWJmMGZiZDRlOGM4ZDYzIiwicGhvbmUiOiIwMTIyMTc0NjU1NCJ9.ssZIJ8puXegceIagHst1QUJglACinMGxPxdhvTTo8";
+// المفاتيح والتوكنات (جلب من Vercel أو استخدام القيم التي قدمتها كـ Fallback)
+export const GEMINI_API_KEY = process.env.API_KEY || 
+export const BLUEBUS_TOKEN = process.env.API_KEY_1 || 
 
-// روابط الـ APIs الخاصة بشركة بلو باص
+// روابط الـ APIs الرسمية التي قدمتها
 export const BLUEBUS_ENDPOINTS = {
-  SEARCH: "https://api.bluebus.com.eg/api/Tour/GetSearchToursForWeb",
-  STATIONS: "https://api.bluebus.com.eg/get-stations/"
+  SEARCH: 
+  STATIONS: 
 };
 
+// خريطة معرفات المدن لشركة بلو باص (City IDs)
 export const CITY_MAP_BLUEBUS: Record<string, number> = {
   'القاهرة': 1, 'الإسكندرية': 2, 'الغردقة': 3, 'شرم الشيخ': 4, 'بورسعيد': 5, 'مرسى مطروح': 6, 'الأقصر': 7, 'أسوان': 8, 'المنصورة': 9
 };
